@@ -1,9 +1,9 @@
 [project]
 name = "vibe-colored-logger"
-version = "0.1.5"
+version = "0.1.6"
 description = "A colored logger with context injection support for Python applications."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.7"
 license = {text = "MIT"}
 authors = [
     {name = "Your Name", email = "your.email@example.com"},
@@ -15,6 +15,7 @@ classifiers = [
 ]
 dependencies = [
     "coloredlogs>=15.0.1",
+    "colorama; sys_platform == 'win32'",
 ]
 
 [build-system]
