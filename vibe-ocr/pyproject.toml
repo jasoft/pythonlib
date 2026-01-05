@@ -5,9 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "vibe-ocr"
 version = "0.1.1"
-authors = [
-  { name="Wei Wang", email="weiwang@example.com" },
-]
+authors = [{ name = "Johnny Wang", email = "ja.invent@gmail.com" }]
 description = "A decoupled OCR helper library using PaddleOCR (via remote server) and SQLite caching."
 readme = "README.md"
 requires-python = ">=3.7"
@@ -26,15 +24,11 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/example/ocrhelper"
-"Bug Tracker" = "https://github.com/example/ocrhelper/issues"
+"Homepage" = "https://github.com/jasoft/pythonlib"
+"Bug Tracker" = "https://github.com/jasoft/pythonlib/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vibe_ocr"]
 
 [dependency-groups]
-dev = [
-    "pyright>=1.1.407",
-    "pytest>=7.4.4",
-    "ruff>=0.14.10",
-]
+dev = ["pyright>=1.1.407", "pytest>=7.4.4", "ruff>=0.14.10"]
