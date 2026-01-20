@@ -92,7 +92,22 @@ clicked = ocr.find_and_click_text(
 
 ## Configuration
 
-### Environment Variables
+### 1. PaddleX OCR Server (Required)
+
+This library requires a running PaddleOCR server (PaddleX 3.0+). You can easily deploy it using Docker:
+
+```bash
+docker run -d --name paddlex \
+  --shm-size=8g \
+  --network=host \
+  ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlex/paddlex:paddlex3.3.11-paddlepaddle3.2.0-cpu \
+  sh -lc "paddlex --install serving && paddlex --serve --pipeline OCR"
+```
+
+*   **Port**: The server listens on `8080` by default.
+*   **Endpoint**: `http://localhost:8080/ocr`
+
+### 2. Environment Variables
 
 *   `OCR_SERVER_URL`: The URL of the PaddleOCR server. Defaults to `http://localhost:8080/ocr`.
 
