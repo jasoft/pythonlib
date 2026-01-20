@@ -12,33 +12,56 @@ pip install vibe-ocr
 
 - **Decoupled Architecture**: Uses a remote OCR server (PaddleOCR) to offload heavy computation.
 - **Smart Caching**: Local SQLite database caches OCR results for identical images/regions, significantly speeding up repeated checks.
+- **Declarative API**: High-level `GameActions` API for chaining operations (filter, map, click).
 - **Snapshot Integration**: Built-in support for taking screenshots (via `airtest` by default) or custom snapshot functions.
 - **Retry Logic**: Automatic retry without cache if text is not found initially.
-- **Debug Friendly**: Options to save debug images with detected regions.
 
 ## Usage Guide
 
 ### 1. Initialization
 
-Initialize the `OCRHelper`. You can customize the output directory for logs/cache and inject a custom snapshot function (useful for testing or non-Airtest environments).
+Initialize the `OCRHelper`.
 
 ```python
 from vibe_ocr import OCRHelper
 
 # Basic initialization
 ocr = OCRHelper(output_dir="output")
-
-# Custom snapshot function (e.g., for testing or different frameworks)
-def my_snapshot_func(filename):
-    # logic to save screenshot to filename
-    pass
-
-ocr = OCRHelper(output_dir="output", snapshot_func=my_snapshot_func)
 ```
 
-### 2. Finding Text
+### 2. High-Level Declarative API (Recommended)
 
-The most common operation is to capture a screen and find specific text.
+The `GameActions` class provides a powerful, fluent interface for finding and interacting with game elements. This is the preferred way to write automation scripts.
+
+```python
+from vibe_ocr import OCRHelper, GameActions
+
+ocr = OCRHelper(output_dir="output")
+actions = GameActions(ocr)
+
+# Find all texts, filter for "Item", and click the first one
+actions.find_all() \
+       .contains("Item") \
+       .min_confidence(0.8) \
+       .first() \
+       .click()
+
+# Find specific text with timeout (retries automatically)
+actions.find("Start Game", timeout=5).click()
+
+# Check if text exists
+if actions.text_exists("Game Over"):
+    print("Game ended")
+
+# Batch operations
+actions.find_all() \
+       .filter(lambda e: "Coin" in e.text) \
+       .click_all()
+```
+
+### 3. Low-Level API: Finding Text
+
+You can also use the `OCRHelper` directly for simple tasks.
 
 ```python
 # Capture screen and find text "Login"
@@ -51,14 +74,13 @@ result = ocr.capture_and_find_text(
 
 if result and result.get("found"):
     print(f"Found 'Login' at: {result['center']}")
-    print(f"Bounding Box: {result['bbox']}")
 else:
     print("Text not found.")
 ```
 
-### 3. Finding and Clicking
+### 4. Low-Level API: Finding and Clicking
 
-A convenience method to find text and simulate a touch/click action (requires `airtest` or compatible environment).
+A convenience method to find text and simulate a touch/click action (requires `airtest` installed).
 
 ```python
 # Find "Confirm" and click it if found
@@ -68,20 +90,15 @@ clicked = ocr.find_and_click_text(
 )
 ```
 
-### 4. Advanced: Batch OCR & Regions
-
-You can optimize performance by searching only within specific regions.
-
-```python
-# Search only in the top-left region [x1, y1, x2, y2]
-ocr.capture_and_find_text("Player Name", regions=[0, 0, 200, 100])
-```
-
 ## Configuration
 
 ### Environment Variables
 
 *   `OCR_SERVER_URL`: The URL of the PaddleOCR server. Defaults to `http://localhost:8080/ocr`.
+
+### Dependencies
+
+*   **Airtest** (Optional but Recommended): The `click()` methods and default snapshot function rely on `airtest`. Ensure it is installed (`pip install airtest`) if you plan to use these features.
 
 ### Constructor Parameters
 

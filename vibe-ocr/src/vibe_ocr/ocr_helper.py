@@ -1287,6 +1287,136 @@ class OCRHelper:
             self.logger.error(f"处理OCR数据时出错: {e}")
             return [] if return_all else self._empty_result()
 
+    def capture_and_find_text(
+        self,
+        target_text,
+        confidence_threshold=0.5,
+        occurrence=1,
+        use_cache=True,
+        regions: Optional[List[int]] = None,
+        debug_save_path: Optional[str] = None,
+        screenshot_path: Optional[str] = None,
+    ):
+        """
+        截图并查找指定文字，如果缓存未找到会自动重试
+        """
+        if screenshot_path:
+            final_path = screenshot_path
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            final_path = os.path.join(self.temp_dir, f"capture_{timestamp}_{unique_id}.png")
+
+        try:
+            if not screenshot_path and self.snapshot_func:
+                 self.snapshot_func(filename=final_path)
+            
+            # 第一次尝试
+            result = self.find_text_in_image(
+                final_path,
+                target_text,
+                confidence_threshold,
+                occurrence,
+                use_cache=use_cache,
+                regions=regions,
+                debug_save_path=debug_save_path,
+                return_all=False,
+            )
+            
+            # 重试逻辑：如果启用了缓存但没找到，尝试禁用缓存重新识别
+            if use_cache and (not result or not result.get("found")):
+                self.logger.debug(f"缓存未找到文字 '{target_text}'，尝试禁用缓存重新识别...")
+                
+                # 重新截图（如果不是提供的固定路径）
+                if not screenshot_path and self.snapshot_func:
+                    self.snapshot_func(filename=final_path)
+                
+                # 手动调用 predict 和 cache 保存逻辑
+                # 因为 find_text_in_image(use_cache=False) 不会保存缓存
+                # 我们希望刷新缓存
+                
+                # 1. 强制重新识别
+                ocr_data = self._get_or_create_ocr_result(
+                    final_path, 
+                    use_cache=False, 
+                    regions=None # 即使指定了区域，也建议全屏识别并缓存，以便后续复用
+                )
+                
+                if ocr_data:
+                    # 2. 手动保存到缓存
+                    self._save_to_cache(final_path, ocr_data, None)
+                    
+                    # 3. 从新数据中查找
+                    if regions:
+                        # 如果指定了区域，需要重新从全屏数据中提取区域逻辑
+                        # 但 _find_text_in_regions 逻辑比较复杂，涉及重新切图
+                        # 这里简单起见，如果指定了regions，我们再次调用 find_text_in_image(use_cache=True)
+                        # 因为现在缓存已经有了新数据
+                         result = self.find_text_in_image(
+                            final_path,
+                            target_text,
+                            confidence_threshold,
+                            occurrence,
+                            use_cache=True, # 现在可以用缓存了
+                            regions=regions,
+                            debug_save_path=debug_save_path,
+                            return_all=False,
+                        )
+                    else:
+                        result = self._find_text_in_json(
+                            ocr_data, 
+                            target_text, 
+                            confidence_threshold, 
+                            occurrence, 
+                            return_all=False
+                        )
+                else:
+                    result = self._empty_result()
+            
+            return result
+        finally:
+            if not screenshot_path and self.delete_temp_screenshots and os.path.exists(final_path):
+                try:
+                    os.remove(final_path)
+                except Exception:
+                    pass
+
+    def find_and_click_text(
+        self,
+        target_text,
+        confidence_threshold=0.5,
+        occurrence=1,
+        use_cache=True,
+        regions: Optional[List[int]] = None,
+    ):
+        """
+        查找并点击文字 (依赖 airtest)
+        """
+        result = self.capture_and_find_text(
+            target_text,
+            confidence_threshold=confidence_threshold,
+            occurrence=occurrence,
+            use_cache=use_cache,
+            regions=regions,
+        )
+        
+        if result and result.get("found"):
+            center = result.get("center")
+            if center:
+                try:
+                    from airtest.core.api import touch
+                    touch(center)
+                    self.logger.info(f"点击了文字 '{target_text}' at {center}")
+                    return True
+                except ImportError:
+                    self.logger.error("未安装 airtest，无法执行点击操作")
+                    return False
+                except Exception as e:
+                    self.logger.error(f"点击文字 '{target_text}' 失败: {e}")
+                    return False
+        
+        return False
+
     def capture_and_get_all_texts(
         self,
         use_cache=True,
