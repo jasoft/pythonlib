@@ -94,7 +94,9 @@ clicked = ocr.find_and_click_text(
 
 ### 1. PaddleX OCR Server (Required)
 
-This library requires a running PaddleOCR server (PaddleX 3.0+). You can easily deploy it using Docker:
+This library requires a running PaddleOCR server (PaddleX 3.0+). You can deploy it using Docker.
+
+**Option A: CPU Version (Lightweight)**
 
 ```bash
 docker run -d --name paddlex \
@@ -103,6 +105,23 @@ docker run -d --name paddlex \
   ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlex/paddlex:paddlex3.3.11-paddlepaddle3.2.0-cpu \
   sh -lc "paddlex --install serving && paddlex --serve --pipeline OCR"
 ```
+
+**Option B: GPU Version (High Performance)**
+
+If you have an NVIDIA GPU, this provides significantly lower latency.
+
+```bash
+docker run -d --name paddlex \
+  --gpus all \
+  --shm-size=8g \
+  --network=host \
+  ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlex/paddlex:paddlex3.0.1-paddlepaddle3.0.0-gpu-cuda11.8-cudnn8.9-trt8.6 \
+  sh -lc "paddlex --install serving && paddlex --serve --pipeline OCR"
+```
+
+**Note on Mobile Models:**
+To use the faster "Mobile" models (recommended for real-time automation), append the following command to switch the config before serving:
+`... sh -lc "paddlex --install serving && paddlex --get_pipeline_config OCR --save_path . && sed -i 's/_server_/_mobile_/g' OCR.yaml && paddlex --serve --pipeline OCR.yaml"`
 
 *   **Port**: The server listens on `8080` by default.
 *   **Endpoint**: `http://localhost:8080/ocr`
