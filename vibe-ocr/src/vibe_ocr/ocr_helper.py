@@ -1036,8 +1036,7 @@ class OCRHelper:
             list: 包含所有匹配项信息的列表
         """
         if not self.snapshot_func:
-            self.logger.error("snapshot_func not set")
-            return []
+            raise RuntimeError("snapshot_func is not set. Cannot capture screenshot.")
 
         # 内部复用 capture_and_find_text 的部分逻辑（截图与重试）
         # 但传递 return_all=True
@@ -1308,8 +1307,10 @@ class OCRHelper:
             final_path = os.path.join(self.temp_dir, f"capture_{timestamp}_{unique_id}.png")
 
         try:
-            if not screenshot_path and self.snapshot_func:
-                 self.snapshot_func(filename=final_path)
+            if not screenshot_path:
+                if not self.snapshot_func:
+                    raise RuntimeError("snapshot_func is not set. Cannot capture screenshot.")
+                self.snapshot_func(filename=final_path)
             
             # 第一次尝试
             result = self.find_text_in_image(
@@ -1433,8 +1434,7 @@ class OCRHelper:
             list: 包含所有文字信息的列表
         """
         if not self.snapshot_func:
-            self.logger.error("snapshot_func not set")
-            return []
+            raise RuntimeError("snapshot_func is not set. Cannot capture screenshot.")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
