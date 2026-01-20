@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vibe-ocr"
-version = "0.1.1"
+version = "0.1.2"
 authors = [{ name = "Johnny Wang", email = "ja.invent@gmail.com" }]
 description = "A decoupled OCR helper library using PaddleOCR (via remote server) and SQLite caching."
 readme = "README.md"
