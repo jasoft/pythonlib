@@ -23,6 +23,12 @@ from PIL import Image
 # 加载环境变量
 load_dotenv()
 
+# 缓存条目默认有效期：24 小时（秒）
+DEFAULT_CACHE_TTL_SECONDS = 24 * 60 * 60
+
+# 两次过期清理之间的最小间隔（秒），避免每次查找都扫一遍缓存表
+CACHE_CLEANUP_INTERVAL_SECONDS = 60
+
 
 class OCRHelper:
     """OCR辅助工具类，封装PaddleOCR功能"""
@@ -38,6 +44,7 @@ class OCRHelper:
         hash_threshold=10,  # hash 汉明距离阈值
         correction_map: Optional[Dict[str, str]] = None,
         snapshot_func: Optional[Callable[..., Any]] = None,
+        cache_ttl_seconds: Optional[int] = None,
     ):
         """
         初始化OCR Helper
@@ -52,6 +59,9 @@ class OCRHelper:
             hash_threshold (int): 哈希汉明距离阈值，默认10
             correction_map (dict): OCR 纠正映射，例如 {"装各": "装备"}
             snapshot_func (callable): 自定义截图函数，接受 filename 参数
+            cache_ttl_seconds (int, optional): 缓存条目有效期（秒）。为 None 时读取
+                环境变量 ``OCR_CACHE_TTL_SECONDS``，该变量也未设置时使用
+                ``DEFAULT_CACHE_TTL_SECONDS``（24 小时）。设为 0 或负数表示永不过期。
         """
         self.output_dir = output_dir
         self.resize_image = resize_image
@@ -62,6 +72,15 @@ class OCRHelper:
         self.hash_threshold = hash_threshold
         self.correction_map = correction_map or {}
         self.snapshot_func = snapshot_func
+
+        # 缓存条目有效期（秒）：解析顺序为显式参数 -> 环境变量 -> 默认 24 小时
+        if cache_ttl_seconds is None:
+            cache_ttl_seconds = int(
+                os.getenv("OCR_CACHE_TTL_SECONDS", str(DEFAULT_CACHE_TTL_SECONDS))
+            )
+        self.cache_ttl_seconds = cache_ttl_seconds
+        # 上次执行过期清理的时间戳，用于清理节流
+        self._last_cache_cleanup = 0.0
 
         self.ocr_url = os.getenv("OCR_SERVER_URL", "http://localhost:8080/ocr")
 
@@ -306,6 +325,9 @@ class OCRHelper:
             OCR 结果字典，没找到返回None
         """
         try:
+            # 先淘汰过期条目：避免复用过期的（可能是错误的）识别结论
+            self._clean_expired_cache()
+
             image_bytes = self._get_image_bytes(image_path=image_path, image=image)
             if image_bytes is None:
                 return None
@@ -403,6 +425,52 @@ class OCRHelper:
         except Exception as e:
             self.logger.error(f"查找缓存失败: {e}")
             return None
+
+    def _clean_expired_cache(self, force: bool = False) -> int:
+        """清理创建时间超过 ``cache_ttl_seconds`` 的缓存条目。
+
+        感知哈希缓存会把某次 OCR 的识别结果长期固化：只要后续画面与缓存图像
+        足够相似（汉明距离 <= ``hash_threshold``），就直接复用旧结果而不再重新
+        识别。一旦某次识别出错，错误结论会被反复命中；而命中会刷新
+        ``last_access_time``，使该条目在 LRU 淘汰中始终排在"最热"位置，
+        最终永不过期（实测曾有一条把文字识别少一个字的条目存活 86 天、
+        被命中上千次）。因此这里按 ``created_time`` 强制淘汰，
+        保证任何一次识别结论最多存活一个 TTL 周期。
+
+        Args:
+            force: 为 True 时忽略清理节流，立即执行清理。
+
+        Returns:
+            本次删除的条目数量；缓存未启用（TTL 非正数）或清理失败时返回 0。
+        """
+        if self.cache_ttl_seconds is None or self.cache_ttl_seconds <= 0:
+            return 0
+
+        now = time.time()
+        if not force and now - self._last_cache_cleanup < CACHE_CLEANUP_INTERVAL_SECONDS:
+            return 0
+        self._last_cache_cleanup = now
+
+        try:
+            expire_time = now - self.cache_ttl_seconds
+            with sqlite3.connect(self.cache_db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM ocr_cache WHERE created_time < ?",
+                    (expire_time,),
+                )
+                deleted = cursor.rowcount
+                conn.commit()
+
+            if deleted > 0:
+                self.logger.info(
+                    f"🧹 清理了 {deleted} 个过期缓存条目"
+                    f"（TTL={self.cache_ttl_seconds}秒）"
+                )
+            return deleted
+        except Exception as e:
+            self.logger.error(f"清理过期缓存失败: {e}")
+            return 0
 
     def _evict_cache(self):
         """
