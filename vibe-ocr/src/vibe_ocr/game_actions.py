@@ -228,9 +228,25 @@ class GameActions:
         use_cache: bool = True,
         regions: Optional[List[int]] = None,
         raise_exception: bool = False,
+        exact: bool = False,
     ) -> GameElement:
         """
         Find a specific text element.
+
+        Args:
+            text: 目标文本。
+            timeout: 超时秒数。
+            similarity_threshold: 置信度阈值。
+            occurrence: 取第几个匹配，从 1 开始。
+            use_cache: 是否使用感知哈希缓存。
+            regions: 限定的区域编号列表。
+            raise_exception: 未找到时是否抛出异常。
+            exact: 是否要求文本完全相等。默认 False 时使用子串匹配，
+                此时查找「领取」会命中「已领取」。当界面上同时存在
+                包含关系的一组文案时，传 True 可以避免误命中。
+
+        Returns:
+            GameElement: 命中的元素；未找到时返回空元素。
         """
         start_time = time.time()
         
@@ -239,12 +255,9 @@ class GameActions:
             first_attempt = False
             
             # Use collection filtering
-            el = (
-                self.find_all(use_cache=use_cache, regions=regions)
-                .contains(text)
-                .min_confidence(similarity_threshold)
-                .get(occurrence - 1)
-            )
+            candidates = self.find_all(use_cache=use_cache, regions=regions)
+            candidates = candidates.equals(text) if exact else candidates.contains(text)
+            el = candidates.min_confidence(similarity_threshold).get(occurrence - 1)
 
             if el:
                 logger.info(f"Found: '{text}' at {el.center}")
