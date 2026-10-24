@@ -29,6 +29,15 @@ DEFAULT_CACHE_TTL_SECONDS = 24 * 60 * 60
 # 两次过期清理之间的最小间隔（秒），避免每次查找都扫一遍缓存表
 CACHE_CLEANUP_INTERVAL_SECONDS = 60
 
+# 可重试的 HTTP 状态码：网关或上游“暂时”不可用时返回，通常一两秒内自愈
+TRANSIENT_HTTP_STATUS_CODES = (429, 500, 502, 503, 504)
+
+# OCR 请求最多尝试次数（含首次）。只作用于“快速失败”的传输层错误
+OCR_MAX_ATTEMPTS = 3
+
+# 每次重试前的等待秒数，按尝试序号取用；超出长度时沿用最后一个
+OCR_RETRY_DELAYS_SECONDS = (0.5, 1.5)
+
 
 class OCRHelper:
     """OCR辅助工具类，封装PaddleOCR功能"""
@@ -903,6 +912,71 @@ class OCRHelper:
 
             return image_path, 1.0
 
+    def _post_ocr(self, payload: Dict[str, Any]) -> requests.Response:
+        """发送 OCR 请求，对瞬态传输错误做有界重试。
+
+        **为什么必须重试（2026-10-24 实测）**：OCR 服务由 AutoStopProxy 按需拉起，
+        代理在上游瞬时不可用时会返回 502。单次失败被 ``_predict_with_timing`` 吞成
+        ``result=None`` 后，调用方看到的是「画面上没有这段文字」，而真相是
+        「这次没读到」。当天 06:27:54 的一次 502 就让「开启宝箱」误判宝库里没有
+        「亡灵宝箱」，直接跳过了 1800 秒的挂机补充奖励；2 秒后的下一次请求就正常。
+        这类「传输层失败 ≠ 内容不存在」的误判，必须在这一层修掉。
+
+        只重试**快速失败**的传输层错误：
+
+        - HTTP 429/500/502/503/504（网关或上游暂时不可用）；
+        - 连接类错误（连接被重置、代理拒绝连接等）。
+
+        **超时不重试**：``timeout=60`` 打满一次就已吃掉调用方看门狗（180 秒）预算的
+        三分之一，再叠重试会把「少领一次奖励」升级成「整轮被杀 + 重启模拟器」。
+
+        Args:
+            payload: PaddleX 3.0 规范的请求体。
+
+        Returns:
+            requests.Response: 已通过 ``raise_for_status()`` 校验的响应对象。
+
+        Raises:
+            requests.exceptions.RequestException: 错误不可重试，或重试次数已用尽。
+        """
+        last_exc: Optional[requests.exceptions.RequestException] = None
+
+        for attempt in range(1, OCR_MAX_ATTEMPTS + 1):
+            try:
+                response = requests.post(self.ocr_url, json=payload, timeout=60)
+                response.raise_for_status()
+                return response
+            except requests.exceptions.HTTPError as exc:
+                last_exc = exc
+                status = getattr(exc.response, "status_code", None)
+                if status not in TRANSIENT_HTTP_STATUS_CODES:
+                    raise
+            except requests.exceptions.ConnectionError as exc:
+                last_exc = exc
+                # ConnectTimeout 也是 ConnectionError 的子类，但语义属于超时，不重试
+                if isinstance(exc, requests.exceptions.Timeout):
+                    raise
+
+            if attempt >= OCR_MAX_ATTEMPTS:
+                raise last_exc
+
+            delay = OCR_RETRY_DELAYS_SECONDS[
+                min(attempt - 1, len(OCR_RETRY_DELAYS_SECONDS) - 1)
+            ]
+            self.logger.warning(
+                "⚠️ OCR 请求失败（%s），%.1f 秒后重试（第 %d/%d 次）",
+                last_exc,
+                delay,
+                attempt + 1,
+                OCR_MAX_ATTEMPTS,
+            )
+            time.sleep(delay)
+
+        # 循环只会在 return / raise 处退出，这里仅作类型收窄兜底
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("OCR 请求未发出")
+
     def _predict_with_timing(self, image_path):
         """
         执行 OCR 识别并记录耗时 (Remote PaddleX 3.0)
@@ -933,9 +1007,8 @@ class OCRHelper:
                 "useTextlineOrientation": False,
             }
 
-            # 3. 发送请求 (默认端口 8080)
-            response = requests.post(self.ocr_url, json=payload, timeout=60)
-            response.raise_for_status()
+            # 3. 发送请求 (默认端口 8080)，瞬态传输错误在这层重试
+            response = self._post_ocr(payload)
             json_resp = response.json()
 
             if json_resp.get("errorCode") == 0:
